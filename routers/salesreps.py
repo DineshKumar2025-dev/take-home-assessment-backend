@@ -14,11 +14,25 @@ router = APIRouter()
 
 
 def resolve_time_range(range_name: Optional[str]):
-
     if range_name in (None, "all"):
         return None, None
+    if range_name == "q3-2025":
+        return date(2025, 7, 1), date(2025, 9, 30)
     if range_name == "q4-2025":
         return date(2025, 10, 1), date(2025, 12, 31)
+    if range_name.startswith("month-"):
+        month_value = range_name.split("month-")[1]
+        try:
+            year = int(month_value[:4])
+            month = int(month_value[5:7])
+            start = date(year, month, 1)
+            if month == 12:
+                end = date(year, 12, 31)
+            else:
+                end = date(year, month + 1, 1) - timedelta(days=1)
+            return start, end
+        except (ValueError, IndexError):
+            return None, None
     return None, None
 
 
@@ -70,7 +84,15 @@ def get_sales_reps(
 
 
 @router.get("/api/sales-reps/{rep_id}")
-def get_sales_rep_detail(rep_id: str, db: Session = Depends(get_db)):
+def get_sales_rep_detail(
+    rep_id: str,
+    range: Optional[str] = Query(None, alias="range", description="all | 30d | 90d | q4-2025"),
+    db: Session = Depends(get_db),
+):
+    start_date = None
+    end_date = None
+    if range not in (None, "all"):
+        start_date, end_date = resolve_time_range(range)
 
     rep_row = db.execute(text("""
         SELECT
@@ -97,7 +119,9 @@ def get_sales_rep_detail(rep_id: str, db: Session = Depends(get_db)):
             SUM(deal_value) FILTER (WHERE status = 'delivered') AS revenue
         FROM leads
         WHERE assigned_to = :rep_id
-    """), {"rep_id": rep_id}).mappings().first()
+          AND (:start_date IS NULL OR created_at >= :start_date)
+          AND (:end_date IS NULL OR created_at <= :end_date)
+    """), {"rep_id": rep_id, "start_date": start_date, "end_date": end_date}).mappings().first()
 
     total_leads = stats_row["total_leads"]
     delivered = stats_row["delivered"]
@@ -112,9 +136,11 @@ def get_sales_rep_detail(rep_id: str, db: Session = Depends(get_db)):
             SUM(deal_value) FILTER (WHERE status = 'delivered') AS revenue
         FROM leads
         WHERE assigned_to = :rep_id
+          AND (:start_date IS NULL OR created_at >= :start_date)
+          AND (:end_date IS NULL OR created_at <= :end_date)
         GROUP BY 1
         ORDER BY 1
-    """), {"rep_id": rep_id}).mappings().all()
+    """), {"rep_id": rep_id, "start_date": start_date, "end_date": end_date}).mappings().all()
 
     monthly_trend = [{
         "month": m["month"].strftime("%Y-%m"),
@@ -136,8 +162,10 @@ def get_sales_rep_detail(rep_id: str, db: Session = Depends(get_db)):
             deal_value
         FROM leads
         WHERE assigned_to = :rep_id
+          AND (:start_date IS NULL OR created_at >= :start_date)
+          AND (:end_date IS NULL OR created_at <= :end_date)
         ORDER BY created_at DESC
-    """), {"rep_id": rep_id}).mappings().all()
+    """), {"rep_id": rep_id, "start_date": start_date, "end_date": end_date}).mappings().all()
 
     lead_list = [{
         "lead_id": l["lead_id"],
@@ -158,9 +186,11 @@ def get_sales_rep_detail(rep_id: str, db: Session = Depends(get_db)):
             COUNT(*) FILTER (WHERE status = 'delivered') AS delivered
         FROM leads
         WHERE assigned_to = :rep_id
+          AND (:start_date IS NULL OR created_at >= :start_date)
+          AND (:end_date IS NULL OR created_at <= :end_date)
         GROUP BY source
         ORDER BY total_leads DESC
-    """), {"rep_id": rep_id}).mappings().all()
+    """), {"rep_id": rep_id, "start_date": start_date, "end_date": end_date}).mappings().all()
 
     lead_sources = [{
         "source": s["source"],
@@ -178,8 +208,10 @@ def get_sales_rep_detail(rep_id: str, db: Session = Depends(get_db)):
         SELECT status, COUNT(*) AS count
         FROM leads
         WHERE assigned_to = :rep_id
+          AND (:start_date IS NULL OR created_at >= :start_date)
+          AND (:end_date IS NULL OR created_at <= :end_date)
         GROUP BY status
-    """), {"rep_id": rep_id}).mappings().all()
+    """), {"rep_id": rep_id, "start_date": start_date, "end_date": end_date}).mappings().all()
 
     counts_by_status = {r["status"]: r["count"] for r in funnel_rows}
     funnel = [
@@ -191,10 +223,14 @@ def get_sales_rep_detail(rep_id: str, db: Session = Depends(get_db)):
     lost_rows = db.execute(text("""
         SELECT lost_reason, COUNT(*) AS count
         FROM leads
-        WHERE assigned_to = :rep_id AND status = 'lost' AND lost_reason IS NOT NULL
+        WHERE assigned_to = :rep_id
+          AND status = 'lost'
+          AND lost_reason IS NOT NULL
+          AND (:start_date IS NULL OR created_at >= :start_date)
+          AND (:end_date IS NULL OR created_at <= :end_date)
         GROUP BY lost_reason
         ORDER BY count DESC
-    """), {"rep_id": rep_id}).mappings().all()
+    """), {"rep_id": rep_id, "start_date": start_date, "end_date": end_date}).mappings().all()
 
     lost_reasons = [{"reason": r["lost_reason"], "count": r["count"]} for r in lost_rows]
 

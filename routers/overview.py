@@ -15,11 +15,47 @@ STAGE_ORDER = ["new", "contacted", "test_drive", "negotiation", "order", "delive
 STALE_DAYS = 7  # a lead with no activity in this many days is "going cold"
 
 
+def _get_date_range(time_range: Optional[str] = None):
+    """Parse time_range parameter and return (start_date, end_date) tuple for filtering."""
+    if not time_range or time_range == "all":
+        return None, None  # No filtering
+    
+    if time_range.startswith("q3-"):
+        year = int(time_range.split("-")[1])
+        return date(year, 7, 1), date(year, 10, 1)
+    elif time_range.startswith("q4-"):
+        year = int(time_range.split("-")[1])
+        return date(year, 10, 1), date(year, 12, 31)
+    elif time_range.startswith("month-"):
+        parts = time_range.split("-")
+        year = int(parts[1])
+        month = int(parts[2])
+        # First day of month to first day of next month
+        if month == 12:
+            return date(year, month, 1), date(year + 1, 1, 1)
+        else:
+            return date(year, month, 1), date(year, month + 1, 1)
+    
+    return None, None
+
+
 @router.get("/api/dashboard/overview")
-def get_dashboard_overview(db: Session = Depends(get_db)):
+def get_dashboard_overview(
+    db: Session = Depends(get_db),
+    time_range: Optional[str] = Query(None)
+):
+    start_date, end_date = _get_date_range(time_range)
+    
+    # Build WHERE clause for date filtering
+    date_filter = ""
+    params = {}
+    if start_date and end_date:
+        date_filter = "WHERE created_at >= :start_date AND created_at < :end_date"
+        params["start_date"] = start_date
+        params["end_date"] = end_date
 
     # --- Top-line totals ---
-    totals = db.execute(text("""
+    totals = db.execute(text(f"""
         SELECT
             COUNT(*) AS total_leads,
             COUNT(*) FILTER (WHERE status = 'delivered') AS delivered,
@@ -27,7 +63,8 @@ def get_dashboard_overview(db: Session = Depends(get_db)):
             SUM(deal_value) FILTER (WHERE status = 'delivered') AS total_revenue,
             AVG(deal_value) FILTER (WHERE status = 'delivered') AS avg_deal_value
         FROM leads
-    """)).mappings().first()
+        {date_filter}
+    """), params).mappings().first()
 
     total_leads = totals["total_leads"]
     delivered = totals["delivered"]
@@ -36,12 +73,13 @@ def get_dashboard_overview(db: Session = Depends(get_db)):
     avg_deal_value = float(totals["avg_deal_value"]) if totals["avg_deal_value"] else 0
 
     # --- Targets (whole dataset spans Jun-Dec 2025 per assignment) ---
-    target_totals = db.execute(text("""
+    target_totals = db.execute(text(f"""
         SELECT
             SUM(target_units) AS target_units,
             SUM(target_revenue) AS target_revenue
         FROM targets
-    """)).mappings().first()
+        {("WHERE month >= :start_date AND month < :end_date" if date_filter else "")}
+    """), params).mappings().first()
 
     target_units = target_totals["target_units"] or 0
     target_revenue = float(target_totals["target_revenue"]) if target_totals["target_revenue"] else 0
@@ -86,7 +124,12 @@ def get_dashboard_overview(db: Session = Depends(get_db)):
     latest_activity = db.execute(text("SELECT MAX(last_activity_at) AS ts FROM leads")).scalar()
     reference_time = latest_activity or datetime.utcnow()
 
-    stale_rows = db.execute(text("""
+    stale_params = {"ref_time": reference_time, "stale_days": STALE_DAYS}
+    if start_date and end_date:
+        stale_params["start_date"] = start_date
+        stale_params["end_date"] = end_date
+    
+    stale_rows = db.execute(text(f"""
         SELECT
             l.id AS lead_id,
             l.customer_name,
@@ -102,8 +145,9 @@ def get_dashboard_overview(db: Session = Depends(get_db)):
         LEFT JOIN sales_reps sr ON sr.id = l.assigned_to
         WHERE l.status NOT IN ('delivered', 'lost')
           AND l.last_activity_at <= (CAST(:ref_time AS timestamptz) - (:stale_days || ' days')::interval)
+          {("AND l.created_at >= :start_date AND l.created_at < :end_date" if start_date and end_date else "")}
         ORDER BY l.last_activity_at ASC
-    """), {"ref_time": reference_time, "stale_days": STALE_DAYS}).mappings().all()
+    """), stale_params).mappings().all()
 
     stale_leads = [{
         "lead_id": r["lead_id"],
@@ -115,16 +159,17 @@ def get_dashboard_overview(db: Session = Depends(get_db)):
     } for r in stale_rows]
 
     # --- Revenue & lead trend (monthly) ---
-    monthly = db.execute(text("""
+    monthly = db.execute(text(f"""
         SELECT
             DATE_TRUNC('month', created_at)::date AS month,
             COUNT(*) AS total_leads,
             COUNT(*) FILTER (WHERE status = 'delivered') AS delivered,
             SUM(deal_value) FILTER (WHERE status = 'delivered') AS revenue
         FROM leads
+        {date_filter}
         GROUP BY 1
         ORDER BY 1
-    """)).mappings().all()
+    """), params).mappings().all()
 
     monthly_trend = [{
         "month": m["month"].strftime("%Y-%m"),
@@ -134,15 +179,16 @@ def get_dashboard_overview(db: Session = Depends(get_db)):
     } for m in monthly]
 
     # --- Lead sources ---
-    sources = db.execute(text("""
+    sources = db.execute(text(f"""
         SELECT
             source,
             COUNT(*) AS total_leads,
             COUNT(*) FILTER (WHERE status = 'delivered') AS delivered
         FROM leads
+        {date_filter}
         GROUP BY source
         ORDER BY total_leads DESC
-    """)).mappings().all()
+    """), params).mappings().all()
 
     lead_sources = [{
         "source": s["source"],
@@ -152,25 +198,33 @@ def get_dashboard_overview(db: Session = Depends(get_db)):
     } for s in sources]
 
     # --- Lost reasons ---
-    lost_rows = db.execute(text("""
+    lost_where = "WHERE status = 'lost' AND lost_reason IS NOT NULL"
+    if start_date and end_date:
+        lost_where += " AND created_at >= :start_date AND created_at < :end_date"
+    
+    lost_rows = db.execute(text(f"""
         SELECT lost_reason, COUNT(*) AS count
         FROM leads
-        WHERE status = 'lost' AND lost_reason IS NOT NULL
+        {lost_where}
         GROUP BY lost_reason
         ORDER BY count DESC
-    """)).mappings().all()
+    """), params).mappings().all()
 
     lost_reasons = [{"reason": r["lost_reason"], "count": r["count"]} for r in lost_rows]
 
     # --- Branch attainment (for a company-wide comparison strip) ---
-    branch_attainment = db.execute(text("""
+    branch_attainment = db.execute(text(f"""
         WITH ls AS (
             SELECT branch_id, SUM(deal_value) FILTER (WHERE status = 'delivered') AS revenue
-            FROM leads GROUP BY branch_id
+            FROM leads
+            {date_filter}
+            GROUP BY branch_id
         ),
         ts AS (
             SELECT branch_id, SUM(target_revenue) AS target_revenue
-            FROM targets GROUP BY branch_id
+            FROM targets
+            {("WHERE month >= :start_date AND month < :end_date" if date_filter else "")}
+            GROUP BY branch_id
         )
         SELECT
             b.id AS branch_id, b.name,
@@ -180,7 +234,7 @@ def get_dashboard_overview(db: Session = Depends(get_db)):
         LEFT JOIN ls ON ls.branch_id = b.id
         LEFT JOIN ts ON ts.branch_id = b.id
         ORDER BY b.id
-    """)).mappings().all()
+    """), params).mappings().all()
 
     branch_attainment_list = [{
         "branch_id": r["branch_id"],

@@ -11,12 +11,22 @@ router = APIRouter()
 
 
 def resolve_time_range(range_name: Optional[str]):
-    today = date.today()
-
     if range_name in (None, "all"):
         return None, None
+    if range_name == "q3-2025":
+        return date(2025, 7, 1), date(2025, 9, 30)
     if range_name == "q4-2025":
         return date(2025, 10, 1), date(2025, 12, 31)
+    if range_name.startswith("month-"):
+        month_value = range_name.split("month-")[1]
+        try:
+            year = int(month_value[:4])
+            month = int(month_value[5:7])
+            start = date(year, month, 1)
+            end = date(year, 12, 31) if month == 12 else date(year, month + 1, 1) - timedelta(days=1)
+            return start, end
+        except (ValueError, IndexError):
+            return None, None
     return None, None
 
 
@@ -25,7 +35,7 @@ def get_overview(
     start_date: Optional[date] = Query(None, description="Filter leads created_at >= this date"),
     end_date: Optional[date] = Query(None, description="Filter leads created_at <= this date"),
     month: Optional[str] = Query(None, description="YYYY-MM-01, filters targets to a single month"),
-    range: Optional[str] = Query(None, alias="range", description="all | 30d | 90d | q4-2025"),
+    range: Optional[str] = Query(None, alias="range", description="all | q3-2025 | q4-2025 | month-2025-06 ... month-2025-12"),
     db: Session = Depends(get_db),
 ):
     if start_date is None and end_date is None and range not in (None, "all"):

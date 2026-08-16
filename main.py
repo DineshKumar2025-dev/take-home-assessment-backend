@@ -7,6 +7,9 @@ from database import get_db  # <-- this is the import you asked about
 from routers.salesreps import router as sales_reps_router
 from routers.branches import router as branches_router
 from routers.overview import router as overview_router
+from routers.forecast import router as forecast_router
+from routers.leaderboard import router as leaderboard_router
+from routers.deliveries import router as deliveries_router
 
 
 
@@ -29,6 +32,9 @@ app.add_middleware(
 app.include_router(sales_reps_router)
 app.include_router(branches_router)
 app.include_router(overview_router)
+app.include_router(forecast_router)
+app.include_router(leaderboard_router)
+app.include_router(deliveries_router)
 
 
 
