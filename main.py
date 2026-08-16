@@ -6,6 +6,7 @@ from sqlalchemy import text
 from database import get_db  # <-- this is the import you asked about
 from routers.salesreps import router as sales_reps_router
 from routers.branches import router as branches_router
+from routers.overview import router as overview_router
 
 
 
@@ -26,6 +27,7 @@ app.add_middleware(
 
 app.include_router(sales_reps_router)
 app.include_router(branches_router)
+app.include_router(overview_router)
 
 
 

@@ -7,6 +7,9 @@ from sqlalchemy import text
 
 from database import get_db
 
+
+from fastapi import HTTPException
+
 router = APIRouter()
 
 
@@ -63,3 +66,147 @@ def get_sales_reps(
     } for r in rows]
 
     return {"sales_reps": reps}
+
+
+
+@router.get("/api/sales-reps/{rep_id}")
+def get_sales_rep_detail(rep_id: str, db: Session = Depends(get_db)):
+
+    rep_row = db.execute(text("""
+        SELECT
+            sr.id AS rep_id,
+            sr.name,
+            sr.role,
+            sr.branch_id,
+            sr.joined,
+            b.name AS branch_name,
+            b.city
+        FROM sales_reps sr
+        JOIN branches b ON b.id = sr.branch_id
+        WHERE sr.id = :rep_id
+    """), {"rep_id": rep_id}).mappings().first()
+
+    if not rep_row:
+        raise HTTPException(status_code=404, detail="Sales rep not found")
+
+    # Summary stats
+    stats_row = db.execute(text("""
+        SELECT
+            COUNT(*) AS total_leads,
+            COUNT(*) FILTER (WHERE status = 'delivered') AS delivered,
+            SUM(deal_value) FILTER (WHERE status = 'delivered') AS revenue
+        FROM leads
+        WHERE assigned_to = :rep_id
+    """), {"rep_id": rep_id}).mappings().first()
+
+    total_leads = stats_row["total_leads"]
+    delivered = stats_row["delivered"]
+    revenue = float(stats_row["revenue"]) if stats_row["revenue"] else 0
+
+    # Monthly trend for this rep
+    monthly = db.execute(text("""
+        SELECT
+            DATE_TRUNC('month', created_at)::date AS month,
+            COUNT(*) AS total_leads,
+            COUNT(*) FILTER (WHERE status = 'delivered') AS delivered,
+            SUM(deal_value) FILTER (WHERE status = 'delivered') AS revenue
+        FROM leads
+        WHERE assigned_to = :rep_id
+        GROUP BY 1
+        ORDER BY 1
+    """), {"rep_id": rep_id}).mappings().all()
+
+    monthly_trend = [{
+        "month": m["month"].strftime("%Y-%m"),
+        "total_leads": m["total_leads"],
+        "delivered": m["delivered"],
+        "revenue": float(m["revenue"]) if m["revenue"] else 0,
+    } for m in monthly]
+
+    # This rep's individual leads (for a detail table)
+    leads = db.execute(text("""
+        SELECT
+            id AS lead_id,
+            customer_name,
+            source,
+            model_interested,
+            status,
+            created_at,
+            last_activity_at,
+            deal_value
+        FROM leads
+        WHERE assigned_to = :rep_id
+        ORDER BY created_at DESC
+    """), {"rep_id": rep_id}).mappings().all()
+
+    lead_list = [{
+        "lead_id": l["lead_id"],
+        "customer_name": l["customer_name"],
+        "source": l["source"],
+        "model_interested": l["model_interested"],
+        "status": l["status"],
+        "created_at": l["created_at"].isoformat(),
+        "last_activity_at": l["last_activity_at"].isoformat(),
+        "deal_value": float(l["deal_value"]) if l["deal_value"] else None,
+    } for l in leads]
+
+    # --- Lead sources ---
+    sources = db.execute(text("""
+        SELECT
+            source,
+            COUNT(*) AS total_leads,
+            COUNT(*) FILTER (WHERE status = 'delivered') AS delivered
+        FROM leads
+        WHERE assigned_to = :rep_id
+        GROUP BY source
+        ORDER BY total_leads DESC
+    """), {"rep_id": rep_id}).mappings().all()
+
+    lead_sources = [{
+        "source": s["source"],
+        "total_leads": s["total_leads"],
+        "delivered": s["delivered"],
+        "conversion_rate_pct": round(s["delivered"] / s["total_leads"] * 100, 1) if s["total_leads"] else None,
+    } for s in sources]
+
+    # --- Funnel (current status distribution) ---
+    # Same STAGE_ORDER assumption as branch detail — verify against
+    # `SELECT DISTINCT status FROM leads;` if this comes back all zeros.
+    STAGE_ORDER = ["new", "contacted", "test_drive", "negotiation", "order", "delivered"]
+
+    funnel_rows = db.execute(text("""
+        SELECT status, COUNT(*) AS count
+        FROM leads
+        WHERE assigned_to = :rep_id
+        GROUP BY status
+    """), {"rep_id": rep_id}).mappings().all()
+
+    counts_by_status = {r["status"]: r["count"] for r in funnel_rows}
+    funnel = [
+        {"stage": stage, "count": counts_by_status.get(stage, 0)}
+        for stage in STAGE_ORDER
+    ]
+
+    # --- Lost reasons ---
+    lost_rows = db.execute(text("""
+        SELECT lost_reason, COUNT(*) AS count
+        FROM leads
+        WHERE assigned_to = :rep_id AND status = 'lost' AND lost_reason IS NOT NULL
+        GROUP BY lost_reason
+        ORDER BY count DESC
+    """), {"rep_id": rep_id}).mappings().all()
+
+    lost_reasons = [{"reason": r["lost_reason"], "count": r["count"]} for r in lost_rows]
+
+    return {
+        "rep": dict(rep_row),
+        "total_leads": total_leads,
+        "delivered": delivered,
+        "revenue": revenue,
+        "conversion_rate_pct": round(delivered / total_leads * 100, 1) if total_leads else None,
+        "monthly_trend": monthly_trend,
+        "lead_sources": lead_sources,
+        "funnel": funnel,
+        "lost_reasons": lost_reasons,
+        "leads": lead_list,
+    }
