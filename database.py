@@ -1,29 +1,16 @@
-import os
-from dotenv import load_dotenv
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker, declarative_base
+from sqlalchemy.pool import NullPool
 from urllib.parse import quote_plus
+
 password = quote_plus("Dinu$4411$1234")
-# Loads variables from the .env file in the project root into the
-# process environment, so os.getenv() below can see them.
-load_dotenv()
+DATABASE_URL = f"postgresql://postgres.jgatvokqoqwzbdemqqkm:{password}@aws-0-ap-south-1.pooler.supabase.com:6543/postgres"
 
-
-DATABASE_URL = "postgresql://postgres.jgatvokqoqwzbdemqqkm:<password>@aws-0-<region>.pooler.supabase.com:6543/postgres"
-
-if DATABASE_URL is None:
-    raise RuntimeError(
-        "DATABASE_URL is not set. Check that a .env file exists "
-        "in the project root and that it defines DATABASE_URL."
-    )
-
-engine = create_engine(DATABASE_URL)
+engine = create_engine(DATABASE_URL, poolclass=NullPool)
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 Base = declarative_base()
 
 
-# FastAPI dependency — inject with `db: Session = Depends(get_db)` in any route.
-# Opens one connection per request and always closes it, even if the route raises.
 def get_db():
     db = SessionLocal()
     try:
