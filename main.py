@@ -19,9 +19,9 @@ app = FastAPI(title="DealerPulse API")
 app.add_middleware(
     CORSMiddleware,
     allow_origins=[
-        "http://localhost:5173",  # Vite dev server
-        "http://localhost:3000",  # Alternative dev port
-        "http://localhost:8000",  # Backend same-origin
+        # "http://localhost:5173",  # Vite dev server
+        # "http://localhost:3000",  # Alternative dev port
+        # "http://localhost:8000",  # Backend same-origin
         "https://dealership-dashboard-five.vercel.app/", #vercel
     ],
     allow_credentials=True,
