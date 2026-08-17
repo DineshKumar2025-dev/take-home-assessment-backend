@@ -23,7 +23,7 @@ app.add_middleware(
         # "http://localhost:5173",  # Vite dev server
         # "http://localhost:3000",  # Alternative dev port
         # "http://localhost:8000",  # Backend same-origin
-        "https://dealership-dashboard-five.vercel.app/", #vercel
+        "https://dealership-dashboard-five.vercel.app", #vercel
     ],
     allow_credentials=True,
     allow_methods=["*"],
