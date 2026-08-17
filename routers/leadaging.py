@@ -65,6 +65,7 @@ def get_lead_aging(
             b.name AS branch_name,
             l.assigned_to,
             sr.name AS rep_name,
+            sr.id AS rep_id,
             l.last_activity_at,
             l.model_interested,
             l.deal_value,
@@ -83,9 +84,14 @@ def get_lead_aging(
         "branch_id": r["branch_id"],
         "branch_name": r["branch_name"],
         "rep_name": r["rep_name"] or "Unassigned",
+        "rep_id": str(r["rep_id"]), 
         "model_interested": r["model_interested"],
         "deal_value": float(r["deal_value"]) if r["deal_value"] else None,
-        "last_activity_at": r["last_activity_at"].isoformat(),
+        "last_activity_at": (
+            r["last_activity_at"].isoformat()
+            if r["last_activity_at"]
+            else None
+        ),
         "days_stale": int(r["days_stale"]),
     } for r in rows]
 
