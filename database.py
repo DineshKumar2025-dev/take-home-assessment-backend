@@ -7,7 +7,7 @@ from sqlalchemy.orm import sessionmaker, declarative_base
 # process environment, so os.getenv() below can see them.
 load_dotenv()
 
-DATABASE_URL = postgresql://postgres:Dinu@4411@db.jgatvokqoqwzbdemqqkm.supabase.co:5432/postgres
+DATABASE_URL = "postgresql://postgres:Dinu%404411@db.jgatvokqoqwzbdemqqkm.supabase.co:5432/postgres"
 
 if DATABASE_URL is None:
     raise RuntimeError(
