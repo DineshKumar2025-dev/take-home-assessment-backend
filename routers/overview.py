@@ -42,9 +42,11 @@ def _get_date_range(time_range: Optional[str] = None):
 @router.get("/api/dashboard/overview")
 def get_dashboard_overview(
     db: Session = Depends(get_db),
-    time_range: Optional[str] = Query(None)
+    range_filter: Optional[str] = Query(None, alias="range"),
+    time_range: Optional[str] = Query(None, alias="time_range"),
 ):
-    start_date, end_date = _get_date_range(time_range)
+    selected_range = range_filter or time_range
+    start_date, end_date = _get_date_range(selected_range)
     
     # Build WHERE clause for date filtering
     date_filter = ""

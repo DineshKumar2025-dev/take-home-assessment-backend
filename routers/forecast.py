@@ -1,6 +1,7 @@
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
+from typing import Optional
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, Query
 from sqlalchemy.orm import Session
 from sqlalchemy import text
 
@@ -12,17 +13,41 @@ PERIOD_START = date(2025, 6, 1)
 PERIOD_END = date(2025, 12, 31)  # last day of the last target month
 
 
+def resolve_time_range(range_name: Optional[str]):
+    if range_name in (None, "all"):
+        return PERIOD_START, PERIOD_END
+    if range_name == "q3-2025":
+        return date(2025, 7, 1), date(2025, 9, 30)
+    if range_name == "q4-2025":
+        return date(2025, 10, 1), date(2025, 12, 31)
+    if range_name.startswith("month-"):
+        month_value = range_name.split("month-")[1]
+        try:
+            year = int(month_value[:4])
+            month = int(month_value[5:7])
+            start = date(year, month, 1)
+            end = date(year, 12, 31) if month == 12 else date(year, month + 1, 1) - timedelta(days=1)
+            return start, end
+        except (ValueError, IndexError):
+            return PERIOD_START, PERIOD_END
+    return PERIOD_START, PERIOD_END
+
+
 @router.get("/api/forecast")
-def get_forecast(db: Session = Depends(get_db)):
+def get_forecast(
+    db: Session = Depends(get_db),
+    range: Optional[str] = Query(None, alias="range"),
+):
+    period_start, period_end = resolve_time_range(range)
 
     # "Today" = latest activity in the dataset, so day-count math stays
     # meaningful for a historical dataset instead of comparing to the
     # real calendar date (which would put us months past PERIOD_END).
     reference_time = db.execute(text("SELECT MAX(last_activity_at) FROM leads")).scalar()
-    today = reference_time.date() if reference_time else PERIOD_END
+    today = reference_time.date() if reference_time else period_end
 
-    total_period_days = (PERIOD_END - PERIOD_START).days + 1
-    days_elapsed = max((today - PERIOD_START).days + 1, 1)
+    total_period_days = (period_end - period_start).days + 1
+    days_elapsed = max((today - period_start).days + 1, 1)
     days_elapsed = min(days_elapsed, total_period_days)
     days_left = max(total_period_days - days_elapsed, 0)
 
@@ -34,7 +59,7 @@ def get_forecast(db: Session = Depends(get_db)):
         FROM targets
         WHERE month >= :start AND month <= :end
         GROUP BY branch_id
-    """), {"start": PERIOD_START, "end": PERIOD_END}).mappings().all()
+    """), {"start": period_start, "end": period_end}).mappings().all()
     target_by_branch = {t["branch_id"]: t for t in targets}
 
     # --- Overall actuals per branch, summed across the whole period ---
@@ -45,7 +70,7 @@ def get_forecast(db: Session = Depends(get_db)):
         FROM leads
         WHERE created_at >= :start AND created_at < (:end + INTERVAL '1 day')
         GROUP BY branch_id
-    """), {"start": PERIOD_START, "end": PERIOD_END}).mappings().all()
+    """), {"start": period_start, "end": period_end}).mappings().all()
     actual_by_branch = {a["branch_id"]: a for a in actuals}
 
     branches = db.execute(text("SELECT id, name, city FROM branches ORDER BY id")).mappings().all()
@@ -107,8 +132,8 @@ def get_forecast(db: Session = Depends(get_db)):
         })
 
     return {
-        "period_start": PERIOD_START.isoformat(),
-        "period_end": PERIOD_END.isoformat(),
+        "period_start": period_start.isoformat(),
+        "period_end": period_end.isoformat(),
         "days_elapsed": days_elapsed,
         "days_left": days_left,
         "total_period_days": total_period_days,

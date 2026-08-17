@@ -1,5 +1,7 @@
-from datetime import datetime
-from fastapi import APIRouter, Depends
+from datetime import date, datetime, timedelta
+from typing import Optional
+
+from fastapi import APIRouter, Depends, Query
 from sqlalchemy.orm import Session
 from sqlalchemy import text
 
@@ -17,13 +19,44 @@ AGE_BUCKETS = [
 ]
 
 
+def resolve_time_range(range_name: Optional[str]):
+    if range_name in (None, "all"):
+        return None, None
+    if range_name == "q3-2025":
+        return date(2025, 7, 1), date(2025, 9, 30)
+    if range_name == "q4-2025":
+        return date(2025, 10, 1), date(2025, 12, 31)
+    if range_name.startswith("month-"):
+        month_value = range_name.split("month-")[1]
+        try:
+            year = int(month_value[:4])
+            month = int(month_value[5:7])
+            start = date(year, month, 1)
+            end = date(year, 12, 31) if month == 12 else date(year, month + 1, 1) - timedelta(days=1)
+            return start, end
+        except (ValueError, IndexError):
+            return None, None
+    return None, None
+
+
 @router.get("/api/lead-aging")
-def get_lead_aging(db: Session = Depends(get_db)):
+def get_lead_aging(
+    db: Session = Depends(get_db),
+    range: Optional[str] = Query(None, alias="range"),
+):
+    start_date, end_date = resolve_time_range(range)
 
     reference_time = db.execute(text("SELECT MAX(last_activity_at) FROM leads")).scalar()
     reference_time = reference_time or datetime.utcnow()
 
-    rows = db.execute(text("""
+    where_clause = "WHERE l.status NOT IN ('delivered', 'lost')"
+    params = {"ref_time": reference_time}
+    if start_date and end_date:
+        where_clause += " AND l.created_at >= :start_date AND l.created_at < :end_date"
+        params["start_date"] = start_date
+        params["end_date"] = end_date + timedelta(days=1)
+
+    rows = db.execute(text(f"""
         SELECT
             l.id AS lead_id,
             l.customer_name,
@@ -39,9 +72,9 @@ def get_lead_aging(db: Session = Depends(get_db)):
         FROM leads l
         JOIN branches b ON b.id = l.branch_id
         LEFT JOIN sales_reps sr ON sr.id = l.assigned_to
-        WHERE l.status NOT IN ('delivered', 'lost')
+        {where_clause}
         ORDER BY l.last_activity_at ASC
-    """), {"ref_time": reference_time}).mappings().all()
+    """), params).mappings().all()
 
     leads = [{
         "lead_id": r["lead_id"],

@@ -1,4 +1,7 @@
-from fastapi import APIRouter, Depends
+from datetime import date, timedelta
+from typing import Optional
+
+from fastapi import APIRouter, Depends, Query
 from sqlalchemy.orm import Session
 from sqlalchemy import text
 
@@ -7,12 +10,45 @@ from database import get_db
 router = APIRouter()
 
 
+def resolve_time_range(range_name: Optional[str]):
+    if range_name in (None, "all"):
+        return None, None
+    if range_name == "q3-2025":
+        return date(2025, 7, 1), date(2025, 9, 30)
+    if range_name == "q4-2025":
+        return date(2025, 10, 1), date(2025, 12, 31)
+    if range_name.startswith("month-"):
+        month_value = range_name.split("month-")[1]
+        try:
+            year = int(month_value[:4])
+            month = int(month_value[5:7])
+            start = date(year, month, 1)
+            end = date(year, 12, 31) if month == 12 else date(year, month + 1, 1) - timedelta(days=1)
+            return start, end
+        except (ValueError, IndexError):
+            return None, None
+    return None, None
+
+
 @router.get("/api/leaderboard")
-def get_leaderboard(db: Session = Depends(get_db)):
+def get_leaderboard(
+    db: Session = Depends(get_db),
+    range: Optional[str] = Query(None, alias="range"),
+):
+    start_date, end_date = resolve_time_range(range)
+
+    rep_join = ""
+    rep_params = {}
+    if start_date and end_date:
+        rep_join = "LEFT JOIN leads l ON l.assigned_to = sr.id AND l.created_at >= :start_date AND l.created_at <= :end_date"
+        rep_params["start_date"] = start_date
+        rep_params["end_date"] = end_date
+    else:
+        rep_join = "LEFT JOIN leads l ON l.assigned_to = sr.id"
 
     # --- Rep performance (only reps with at least 1 lead, so idle/new
     # reps with zero activity don't clutter the "worst performer" list) ---
-    rep_rows = db.execute(text("""
+    rep_rows = db.execute(text(f"""
         SELECT
             sr.id AS rep_id,
             sr.name,
@@ -24,11 +60,11 @@ def get_leaderboard(db: Session = Depends(get_db)):
             COALESCE(SUM(l.deal_value) FILTER (WHERE l.status = 'delivered'), 0) AS revenue
         FROM sales_reps sr
         JOIN branches b ON b.id = sr.branch_id
-        LEFT JOIN leads l ON l.assigned_to = sr.id
+        {rep_join}
         GROUP BY sr.id, sr.name, sr.role, sr.branch_id, b.name
         HAVING COUNT(l.id) > 0
         ORDER BY revenue DESC
-    """)).mappings().all()
+    """), rep_params).mappings().all()
 
     reps = []
     for r in rep_rows:
@@ -60,7 +96,14 @@ def get_leaderboard(db: Session = Depends(get_db)):
     bottom_5 = sorted(eligible_for_bottom, key=lambda r: r["revenue"])[:5]
 
     # --- Branch ranking ---
-    branch_rows = db.execute(text("""
+    branch_params = {}
+    branch_where = ""
+    if start_date and end_date:
+        branch_where = "WHERE created_at >= :start_date AND created_at <= :end_date"
+        branch_params["start_date"] = start_date
+        branch_params["end_date"] = end_date
+
+    branch_rows = db.execute(text(f"""
         WITH ls AS (
             SELECT
                 branch_id,
@@ -68,11 +111,14 @@ def get_leaderboard(db: Session = Depends(get_db)):
                 COUNT(*) FILTER (WHERE status = 'delivered') AS delivered,
                 COALESCE(SUM(deal_value) FILTER (WHERE status = 'delivered'), 0) AS revenue
             FROM leads
+            {branch_where}
             GROUP BY branch_id
         ),
         ts AS (
             SELECT branch_id, SUM(target_revenue) AS target_revenue
             FROM targets
+            WHERE (:start_date IS NULL OR month >= :start_date)
+              AND (:end_date IS NULL OR month <= :end_date)
             GROUP BY branch_id
         )
         SELECT
@@ -86,7 +132,7 @@ def get_leaderboard(db: Session = Depends(get_db)):
         FROM branches b
         LEFT JOIN ls ON ls.branch_id = b.id
         LEFT JOIN ts ON ts.branch_id = b.id
-    """)).mappings().all()
+    """), {**branch_params, "start_date": start_date, "end_date": end_date}).mappings().all()
 
     branches = []
     for b in branch_rows:
