@@ -2,12 +2,14 @@ import os
 from dotenv import load_dotenv
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker, declarative_base
-
+from urllib.parse import quote_plus
+password = quote_plus("Dinu$4411$1234")
 # Loads variables from the .env file in the project root into the
 # process environment, so os.getenv() below can see them.
 load_dotenv()
 
-DATABASE_URL = "postgresql://postgres:Dinu$4411$1234@db.jgatvokqoqwzbdemqqkm.supabase.co:5432/postgres"
+
+DATABASE_URL = "postgresql://postgres.jgatvokqoqwzbdemqqkm:<password>@aws-0-<region>.pooler.supabase.com:6543/postgres"
 
 if DATABASE_URL is None:
     raise RuntimeError(
