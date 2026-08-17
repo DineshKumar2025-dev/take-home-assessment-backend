@@ -10,6 +10,7 @@ from routers.overview import router as overview_router
 from routers.forecast import router as forecast_router
 from routers.leaderboard import router as leaderboard_router
 from routers.deliveries import router as deliveries_router
+from routers.leadaging import router as lead_aging_router
 
 
 
@@ -35,7 +36,7 @@ app.include_router(overview_router)
 app.include_router(forecast_router)
 app.include_router(leaderboard_router)
 app.include_router(deliveries_router)
-
+app.include_router(lead_aging_router)
 
 
 @app.get("/")
