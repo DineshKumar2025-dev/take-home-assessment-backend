@@ -1,7 +1,6 @@
 from fastapi import FastAPI, Depends
 from fastapi.middleware.cors import CORSMiddleware
-from sqlalchemy.orm import Session
-from sqlalchemy import text
+
 
 from database import get_db  # <-- this is the import you asked about
 from routers.salesreps import router as sales_reps_router
@@ -11,8 +10,8 @@ from routers.forecast import router as forecast_router
 from routers.leaderboard import router as leaderboard_router
 from routers.deliveries import router as deliveries_router
 from routers.leadaging import router as lead_aging_router
-
-
+from routers.whatif import router as whatif_router
+from routers.anomaly import router  as anomoly_router
 
 app = FastAPI(title="DealerPulse API")
 
@@ -37,6 +36,8 @@ app.include_router(forecast_router)
 app.include_router(leaderboard_router)
 app.include_router(deliveries_router)
 app.include_router(lead_aging_router)
+app.include_router(whatif_router)
+app.include_router(anomoly_router)
 
 
 @app.get("/")
